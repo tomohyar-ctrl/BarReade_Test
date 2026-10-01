@@ -1,7 +1,8 @@
-<!DOCTYPE html>
-<html lang="ja">
 const beep = new Audio();
 beep.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+
+<!DOCTYPE html>
+<html lang="ja">
   
 <head>
   <meta charset="UTF-8">
