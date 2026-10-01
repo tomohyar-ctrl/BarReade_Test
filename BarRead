@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>iPhone用バーコードリーダー</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; }
+    video { width: 100%; max-width: 400px; }
+    #result { margin-top: 1rem; font-size: 1.2rem; }
+  </style>
+</head>
+<body>
+  <h1>バーコードリーダー（Web）</h1>
+
+  <video id="video" playsinline muted></video>
+  <div id="result">バーコード未検出</div>
+  <button id="startBtn">カメラ開始</button>
+  <button id="stopBtn">停止</button>
+
+  <!-- ZXing ブラウザ版（CDN） -->
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
+  <script>
+    const video = document.getElementById('video');
+    const resultDiv = document.getElementById('result');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+
+    const codeReader = new ZXing.BrowserMultiFormatReader();
+    let currentStream = null;
+
+    async function startCamera() {
+      try {
+        // 利用可能なカメラ一覧取得
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+        // 背面カメラっぽいものを選ぶ（ラベルに "back" が含まれるものを優先）
+        let selectedDeviceId = videoDevices[0]?.deviceId;
+        for (const d of videoDevices) {
+          if (d.label.toLowerCase().includes('back')) {
+            selectedDeviceId = d.deviceId;
+            break;
+          }
+        }
+
+        // ZXing にカメラ＋video要素を渡してデコード開始
+        await codeReader.decodeFromVideoDevice(
+          selectedDeviceId,
+          video,
+          (result, err) => {
+            if (result) {
+              resultDiv.textContent = `読み取り結果: ${result.getText()}`;
+            } else if (err && !(err instanceof ZXing.NotFoundException)) {
+              console.error(err);
+            }
+          }
+        );
+
+        // getUserMedia で直接ストリームを取得しておく（停止用）
+        currentStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined }
+        });
+        video.srcObject = currentStream;
+        await video.play();
+      } catch (e) {
+        console.error(e);
+        alert('カメラの起動に失敗しました。HTTPSでアクセスしているか、権限を確認してください。');
+      }
+    }
+
+    function stopCamera() {
+      try {
+        codeReader.reset();
+        if (currentStream) {
+          currentStream.getTracks().forEach(t => t.stop());
+          currentStream = null;
+        }
+        video.srcObject = null;
+        resultDiv.textContent = 'バーコード未検出';
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+  </script>
+</body>
+</html>
