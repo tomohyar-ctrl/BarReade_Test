@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>バーコード ２/ QR リーダー（業務用Webアプリ）</title>
+  <title>バーコード/ QR リーダー（業務用Webアプリ）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <!-- 業務アプリ風の簡易デザイン -->
@@ -143,7 +143,7 @@
     <section class="card">
       <h2>スキャン</h2>
       <div class="description">
-        *3 iPhone / PC のブラウザから利用できるバーコード・QRコードリーダーです。<br>
+        *4 iPhone / PC のブラウザから利用できるバーコード・QRコードリーダーです。<br>
         読み取り結果は下部の「連携」から Power Apps / Excel / OneDrive に渡せます。
       </div>
 
@@ -200,6 +200,7 @@
 
   <!-- ZXing ブラウザ版（CDN） -->
   <script src="https://unpkg.com/@zxing/library@latest"></script>
+<script src="https://unpkg.com/@zxing/library@latest"></script>
 <script>
   const video = document.getElementById('video');
   const resultDiv = document.getElementById('result');
@@ -211,10 +212,21 @@
   const openPowerAppsBtn = document.getElementById('openPowerAppsBtn');
   const copyUrlBtn = document.getElementById('copyUrlBtn');
 
-  const codeReader = new ZXing.BrowserMultiFormatReader();
+  // 1. スキャン速度向上のため、対応フォーマットを主要なものに絞り込む（全形式探索を防ぐ）
+  const hints = new Map();
+  const formats = [
+    ZXing.BarcodeFormat.QR_CODE,
+    ZXing.BarcodeFormat.CODE_128,
+    ZXing.BarcodeFormat.EAN_13,
+    ZXing.BarcodeFormat.EAN_8,
+    ZXing.BarcodeFormat.CODE_39
+  ];
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+
+  const codeReader = new ZXing.BrowserMultiFormatReader(hints);
   let lastResultText = "";
 
-  // Web Audio API のコンテキスト作成
+  // Web Audio API
   let audioCtx = null;
 
   function log(message) {
@@ -222,28 +234,20 @@
     logDiv.textContent = `[${time}] ${message}\n` + logDiv.textContent;
   }
 
-  // 「ピッ」音を発声する関数（Web Audio API）
   function playBeep() {
     try {
       if (!audioCtx) return;
-      
-      // AudioContext が suspend 状態の場合は resume
       if (audioCtx.state === 'suspended') {
         audioCtx.resume();
       }
-
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
-
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(2000, audioCtx.currentTime); // 2000Hz (高いピッ音)
-      
-      gain.gain.setValueAtTime(0.1, audioCtx.currentTime); // 音量
-      gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.1); // 0.1秒で減衰
-
+      osc.frequency.setValueAtTime(2000, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.1);
       osc.connect(gain);
       gain.connect(audioCtx.destination);
-
       osc.start();
       osc.stop(audioCtx.currentTime + 0.1);
     } catch (e) {
@@ -251,11 +255,38 @@
     }
   }
 
+  // カメラ起動後にオートフォーカスや高画質設定をストリームに強制適用する関数
+  async function applyFastCameraSettings() {
+    try {
+      const stream = video.srcObject;
+      if (!stream) return;
+      
+      const track = stream.getVideoTracks()[0];
+      if (!track) return;
+
+      const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+      const constraints = {};
+
+      // オートフォーカス（連続ピント合わせ）を適用
+      if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+        constraints.focusMode = 'continuous';
+      }
+
+      // 適用
+      if (Object.keys(constraints).length > 0) {
+        await track.applyConstraints({ advanced: [constraints] });
+        log("カメラのオートフォーカス（Continuous）を適用しました");
+      }
+    } catch (err) {
+      // 一部のiOS/SafariではapplyConstraintsが未対応な場合があるためログのみ出力
+      log(`カメラ詳細設定スキップ: ${err.message || err}`);
+    }
+  }
+
   async function startCamera() {
     try {
       log("カメラ開始処理を開始");
 
-      // ユーザーのタップ操作内で AudioContext を初期化・有効化（iOS の自動再生ブロック対策）
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       }
@@ -263,13 +294,9 @@
         await audioCtx.resume();
       }
 
-      // 一度リセットして前のストリームを確実に停止
       codeReader.reset();
 
-      // 1. 利用可能なカメラデバイス一覧を取得
       const videoInputDevices = await codeReader.getVideoInputDevices();
-      
-      // 2. 背面カメラ（back/rear/environment）を優先的に探す
       let selectedDeviceId = undefined;
       if (videoInputDevices.length > 0) {
         const backCamera = videoInputDevices.find(device => 
@@ -278,11 +305,20 @@
         selectedDeviceId = backCamera ? backCamera.deviceId : videoInputDevices[videoInputDevices.length - 1].deviceId;
       }
 
-      log(`選択されたカメラID: ${selectedDeviceId || "デフォルト"}`);
+      // 2. 解像度を上げてバーコードの輪郭をクリアにし、レスポンスを上げる
+      const customConstraints = {
+        video: {
+          deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          facingMode: "environment"
+        }
+      };
 
-      // 3. デコード開始
-      await codeReader.decodeFromVideoDevice(
-        selectedDeviceId,
+      log(`選択カメラID: ${selectedDeviceId || "自動設定"}`);
+
+      await codeReader.decodeFromConstraints(
+        customConstraints,
         'video',
         (result, err) => {
           if (result) {
@@ -291,8 +327,6 @@
               lastResultText = text;
               resultDiv.textContent = `読み取り結果：${text}`;
               log(`コード検出: ${text}`);
-
-              // Web Audio API で「ピッ」音を鳴らす
               playBeep();
             }
           } else if (err && !(err instanceof ZXing.NotFoundException)) {
@@ -301,9 +335,12 @@
         }
       );
 
+      // ストリーム起動後にオートフォーカス設定を適用
+      setTimeout(applyFastCameraSettings, 500);
+
       startBtn.disabled = true;
       stopBtn.disabled = false;
-      log("カメラ起動完了");
+      log("カメラ起動完了（高速スキャンモード）");
     } catch (e) {
       console.error(e);
       log(`カメラ起動エラー: ${e}`);
@@ -374,6 +411,7 @@
   openPowerAppsBtn.addEventListener('click', openPowerApps);
   copyUrlBtn.addEventListener('click', copyPowerAppsUrl);
 
-  log("ページ読み込み完了。GitHub Pages / HTTPS 上での利用を推奨します。");
-</script></body>
+  log("ページ読み込み完了。");
+</script>
+</body>
 </html>
