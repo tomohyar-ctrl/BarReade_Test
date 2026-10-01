@@ -143,7 +143,7 @@
     <section class="card">
       <h2>スキャン</h2>
       <div class="description">
-        *2iPhone / PC のブラウザから利用できるバーコード・QRコードリーダーです。<br>
+        *3 iPhone / PC のブラウザから利用できるバーコード・QRコードリーダーです。<br>
         読み取り結果は下部の「連携」から Power Apps / Excel / OneDrive に渡せます。
       </div>
 
@@ -200,144 +200,180 @@
 
   <!-- ZXing ブラウザ版（CDN） -->
   <script src="https://unpkg.com/@zxing/library@latest"></script>
-  <script>
-    const video = document.getElementById('video');
-    const resultDiv = document.getElementById('result');
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const clearBtn = document.getElementById('clearBtn');
-    const logDiv = document.getElementById('log');
-    const powerAppsUrlInput = document.getElementById('powerAppsUrl');
-    const openPowerAppsBtn = document.getElementById('openPowerAppsBtn');
-    const copyUrlBtn = document.getElementById('copyUrlBtn');
+<script>
+  const video = document.getElementById('video');
+  const resultDiv = document.getElementById('result');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const logDiv = document.getElementById('log');
+  const powerAppsUrlInput = document.getElementById('powerAppsUrl');
+  const openPowerAppsBtn = document.getElementById('openPowerAppsBtn');
+  const copyUrlBtn = document.getElementById('copyUrlBtn');
 
-    const codeReader = new ZXing.BrowserMultiFormatReader();
-    let lastResultText = "";
+  const codeReader = new ZXing.BrowserMultiFormatReader();
+  let lastResultText = "";
 
-    function log(message) {
-      const time = new Date().toLocaleTimeString();
-      logDiv.textContent = `[${time}] ${message}\n` + logDiv.textContent;
-    }
+  // Web Audio API のコンテキスト作成
+  let audioCtx = null;
 
-    const beep = new Audio();
-    beep.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
-
-async function startCamera() {
-  try {
-    log("カメラ開始処理を開始");
-
-    // 一度リセットして前のストリームを確実に停止
-    codeReader.reset();
-
-    // 1. 利用可能なカメラデバイス一覧を取得
-    const videoInputDevices = await codeReader.getVideoInputDevices();
-    
-    // 2. 背面カメラ（back/rear/environment）を優先的に探す
-    let selectedDeviceId = undefined;
-    if (videoInputDevices.length > 0) {
-      const backCamera = videoInputDevices.find(device => 
-        /back|rear|environment/i.test(device.label)
-      );
-      // 背面カメラが見つかればそのID、見つからなければリストの最後のカメラ（スマホでは通常背面）を使用
-      selectedDeviceId = backCamera ? backCamera.deviceId : videoInputDevices[videoInputDevices.length - 1].deviceId;
-    }
-
-    log(`選択されたカメラID: ${selectedDeviceId || "デフォルト"}`);
-
-    // 3. デバイスIDを指定してデコード開始（第一引数は deviceId または null/undefined）
-    await codeReader.decodeFromVideoDevice(
-      selectedDeviceId,
-      'video',
-      (result, err) => {
-        if (result) {
-          const text = result.getText();
-          if (text !== lastResultText) {
-            lastResultText = text;
-            resultDiv.textContent = `読み取り結果：${text}`;
-            log(`コード検出: ${text}`);
-
-            // ピッ音再生
-            beep.play().catch(() => {});
-          }
-        } else if (err && !(err instanceof ZXing.NotFoundException)) {
-          log(`デコードエラー: ${err}`);
-        }
-      }
-    );
-
-    startBtn.disabled = true;
-    stopBtn.disabled = false;
-    log("カメラ起動完了");
-  } catch (e) {
-    console.error(e);
-    log(`カメラ起動エラー: ${e}`);
-    alert(`カメラの起動に失敗しました: ${e.message || e}`);
+  function log(message) {
+    const time = new Date().toLocaleTimeString();
+    logDiv.textContent = `[${time}] ${message}\n` + logDiv.textContent;
   }
-}
-    function stopCamera() {
-      try {
-        log("カメラ停止処理を開始");
-        codeReader.reset();
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-        log("カメラ停止完了");
-      } catch (e) {
-        console.error(e);
-        log(`カメラ停止エラー: ${e}`);
-      }
-    }
 
-    function clearResult() {
-      lastResultText = "";
-      resultDiv.textContent = "読み取り結果：未検出";
-      log("読み取り結果をクリア");
-    }
-
-    function buildPowerAppsUrl() {
-      const base = powerAppsUrlInput.value.trim();
-      if (!base) {
-        alert("Power Apps のベースURLを入力してください。");
-        return null;
-      }
-      if (!lastResultText) {
-        alert("読み取り結果がありません。先にコードをスキャンしてください。");
-        return null;
+  // 「ピッ」音を発声する関数（Web Audio API）
+  function playBeep() {
+    try {
+      if (!audioCtx) return;
+      
+      // AudioContext が suspend 状態の場合は resume
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
       }
 
-      const encoded = encodeURIComponent(lastResultText);
-      const hasQuery = base.includes("?");
-      const url = base + (hasQuery ? "&" : "?") + "code=" + encoded;
-      return url;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(2000, audioCtx.currentTime); // 2000Hz (高いピッ音)
+      
+      gain.gain.setValueAtTime(0.1, audioCtx.currentTime); // 音量
+      gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.1); // 0.1秒で減衰
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.1);
+    } catch (e) {
+      console.error("ビープ音再生エラー:", e);
+    }
+  }
+
+  async function startCamera() {
+    try {
+      log("カメラ開始処理を開始");
+
+      // ユーザーのタップ操作内で AudioContext を初期化・有効化（iOS の自動再生ブロック対策）
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+
+      // 一度リセットして前のストリームを確実に停止
+      codeReader.reset();
+
+      // 1. 利用可能なカメラデバイス一覧を取得
+      const videoInputDevices = await codeReader.getVideoInputDevices();
+      
+      // 2. 背面カメラ（back/rear/environment）を優先的に探す
+      let selectedDeviceId = undefined;
+      if (videoInputDevices.length > 0) {
+        const backCamera = videoInputDevices.find(device => 
+          /back|rear|environment/i.test(device.label)
+        );
+        selectedDeviceId = backCamera ? backCamera.deviceId : videoInputDevices[videoInputDevices.length - 1].deviceId;
+      }
+
+      log(`選択されたカメラID: ${selectedDeviceId || "デフォルト"}`);
+
+      // 3. デコード開始
+      await codeReader.decodeFromVideoDevice(
+        selectedDeviceId,
+        'video',
+        (result, err) => {
+          if (result) {
+            const text = result.getText();
+            if (text !== lastResultText) {
+              lastResultText = text;
+              resultDiv.textContent = `読み取り結果：${text}`;
+              log(`コード検出: ${text}`);
+
+              // Web Audio API で「ピッ」音を鳴らす
+              playBeep();
+            }
+          } else if (err && !(err instanceof ZXing.NotFoundException)) {
+            log(`デコードエラー: ${err}`);
+          }
+        }
+      );
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      log("カメラ起動完了");
+    } catch (e) {
+      console.error(e);
+      log(`カメラ起動エラー: ${e}`);
+      alert(`カメラの起動に失敗しました: ${e.message || e}`);
+    }
+  }
+
+  function stopCamera() {
+    try {
+      log("カメラ停止処理を開始");
+      codeReader.reset();
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      log("カメラ停止完了");
+    } catch (e) {
+      console.error(e);
+      log(`カメラ停止エラー: ${e}`);
+    }
+  }
+
+  function clearResult() {
+    lastResultText = "";
+    resultDiv.textContent = "読み取り結果：未検出";
+    log("読み取り結果をクリア");
+  }
+
+  function buildPowerAppsUrl() {
+    const base = powerAppsUrlInput.value.trim();
+    if (!base) {
+      alert("Power Apps のベースURLを入力してください。");
+      return null;
+    }
+    if (!lastResultText) {
+      alert("読み取り結果がありません。先にコードをスキャンしてください。");
+      return null;
     }
 
-    function openPowerApps() {
-      const url = buildPowerAppsUrl();
-      if (!url) return;
-      log(`Power Apps 連携URLに遷移: ${url}`);
-      window.location.href = url;
-    }
+    const encoded = encodeURIComponent(lastResultText);
+    const hasQuery = base.includes("?");
+    const url = base + (hasQuery ? "&" : "?") + "code=" + encoded;
+    return url;
+  }
 
-    function copyPowerAppsUrl() {
-      const url = buildPowerAppsUrl();
-      if (!url) return;
-      navigator.clipboard.writeText(url)
-        .then(() => {
-          log("連携URLをクリップボードにコピーしました");
-          alert("連携URLをコピーしました。");
-        })
-        .catch(err => {
-          log(`クリップボードコピーエラー: ${err}`);
-          alert("コピーに失敗しました。ブラウザの権限設定を確認してください。");
-        });
-    }
+  function openPowerApps() {
+    const url = buildPowerAppsUrl();
+    if (!url) return;
+    log(`Power Apps 連携URLに遷移: ${url}`);
+    window.location.href = url;
+  }
 
-    startBtn.addEventListener('click', startCamera);
-    stopBtn.addEventListener('click', stopCamera);
-    clearBtn.addEventListener('click', clearResult);
-    openPowerAppsBtn.addEventListener('click', openPowerApps);
-    copyUrlBtn.addEventListener('click', copyPowerAppsUrl);
+  function copyPowerAppsUrl() {
+    const url = buildPowerAppsUrl();
+    if (!url) return;
+    navigator.clipboard.writeText(url)
+      .then(() => {
+        log("連携URLをクリップボードにコピーしました");
+        alert("連携URLをコピーしました。");
+      })
+      .catch(err => {
+        log(`クリップボードコピーエラー: ${err}`);
+        alert("コピーに失敗しました。ブラウザの権限設定を確認してください。");
+      });
+  }
 
-    log("ページ読み込み完了。GitHub Pages / HTTPS 上での利用を推奨します。");
-  </script>
-</body>
+  startBtn.addEventListener('click', startCamera);
+  stopBtn.addEventListener('click', stopCamera);
+  clearBtn.addEventListener('click', clearResult);
+  openPowerAppsBtn.addEventListener('click', openPowerApps);
+  copyUrlBtn.addEventListener('click', copyPowerAppsUrl);
+
+  log("ページ読み込み完了。GitHub Pages / HTTPS 上での利用を推奨します。");
+</script></body>
 </html>
